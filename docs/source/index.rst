@@ -41,6 +41,8 @@ NumPyro documentation
    tutorials/other_samplers
    tutorials/circulant_gp
    tutorials/nnx_example
+   tutorials/gpjax_example
+   tutorials/consensus_mc
 
 .. nbgallery::
    :maxdepth: 1

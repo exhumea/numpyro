@@ -762,7 +762,7 @@ class HMC(MCMCKernel):
         if self._model is not None:
             z = init_params[0] if isinstance(init_params, ParamInfo) else init_params
             if isinstance(dense_mass, bool):
-                # XXX: by default, the order variables are sorted by their names,
+                # Note: by default, the order variables are sorted by their names,
                 # this is to be compatible with older numpyro versions
                 # and to match autoguide scale parameter and jax flatten utils
                 dense_mass = [tuple(sorted(z))] if dense_mass else []
@@ -790,7 +790,7 @@ class HMC(MCMCKernel):
         if is_prng_key(rng_key):
             init_state = hmc_init_fn(init_params, rng_key)
         else:
-            # XXX it is safe to run hmc_init_fn under vmap despite that hmc_init_fn changes some
+            # Note it's safe to run hmc_init_fn under vmap despite that hmc_init_fn changes some
             # nonlocal variables: momentum_generator, wa_update, trajectory_len, max_treedepth,
             # wa_steps because those variables do not depend on traced args: init_params, rng_key.
             init_state = vmap(hmc_init_fn)(init_params, rng_key)
@@ -908,6 +908,9 @@ class NUTS(HMC):
         only supports forward-mode differentiation. See
         `JAX's The Autodiff Cookbook <https://jax.readthedocs.io/en/latest/notebooks/autodiff_cookbook.html>`_
         for more information.
+    :param bool regularize_mass_matrix: whether or not to regularize the estimated mass
+        matrix for numerical stability during warmup phase. Defaults to True. This flag
+        does not take effect if ``adapt_mass_matrix == False``.
     """
 
     def __init__(

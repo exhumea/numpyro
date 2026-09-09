@@ -746,7 +746,7 @@ def test_elbo_enumerate_plate_7(scale):
         [[[0.4, 0.6], [0.3, 0.7]], [[0.3, 0.7], [0.2, 0.8]]]
     )
     params["model_probs_e"] = jnp.array([[0.75, 0.25], [0.55, 0.45]])
-    params["guide_probs_a"] = jnp.array([0.35, 0.64])
+    params["guide_probs_a"] = jnp.array([0.35, 0.65])
     params["guide_probs_c"] = jnp.array([[0.0, 1.0], [1.0, 0.0]])  # deterministic
 
     @handlers.scale(scale=scale)
@@ -772,6 +772,7 @@ def test_elbo_enumerate_plate_7(scale):
             params["model_probs_e"],
             constraint=constraints.simplex,
         )
+
         a = pyro.sample("a", dist.Categorical(probs_a))
         b = pyro.sample(
             "b", dist.Categorical(probs_b[a]), infer={"enumerate": "parallel"}
@@ -793,6 +794,7 @@ def test_elbo_enumerate_plate_7(scale):
         probs_c = pyro.param(
             "guide_probs_c", params["guide_probs_c"], constraint=constraints.simplex
         )
+
         a = pyro.sample("a", dist.Categorical(probs_a), infer={"enumerate": "parallel"})
         with pyro.plate("data", 2):
             pyro.sample("c", dist.Categorical(probs_c[a]))
@@ -820,6 +822,7 @@ def test_elbo_enumerate_plate_7(scale):
             params["model_probs_e"],
             constraint=constraints.simplex,
         )
+
         a = pyro.sample("a", dist.Categorical(probs_a))
         b = pyro.sample(
             "b", dist.Categorical(probs_b[a]), infer={"enumerate": "parallel"}
@@ -841,6 +844,7 @@ def test_elbo_enumerate_plate_7(scale):
         probs_c = pyro.param(
             "guide_probs_c", params["guide_probs_c"], constraint=constraints.simplex
         )
+
         a = pyro.sample("a", dist.Categorical(probs_a), infer={"enumerate": "parallel"})
         for i in range(2):
             pyro.sample(f"c_{i}", dist.Categorical(probs_c[a]))
@@ -2493,3 +2497,31 @@ def test_guide_plate_contraction():
 
     assert_equal(enum_loss, graph_loss, prec=1e-3)
     assert_equal(enum_grads, graph_grads, prec=2e-2)
+
+
+def test_trace_enum_elbo_with_auxiliary_site():
+    """Regression test for https://github.com/pyro-ppl/numpyro/issues/2013.
+    TraceEnum_ELBO should handle guide sites marked with is_auxiliary=True
+    that have no corresponding site in the model.
+    """
+
+    def model():
+        loc = pyro.sample("loc", dist.Normal(0.0, 1.0))
+        x = pyro.sample(
+            "x",
+            dist.Categorical(jnp.array([0.3, 0.7])),
+            infer={"enumerate": "parallel"},
+        )
+        pyro.sample("obs", dist.Normal(loc + x, 1.0), obs=jnp.array(1.5))
+
+    def guide():
+        aux = pyro.sample(
+            "aux",
+            dist.Normal(jnp.zeros(2), jnp.ones(2)).to_event(1),
+            infer={"is_auxiliary": True},
+        )
+        pyro.sample("loc", dist.Delta(aux[0]))
+
+    elbo = infer.TraceEnum_ELBO()
+    loss = elbo.loss(random.key(0), {}, model, guide)
+    assert jnp.isfinite(loss), f"Expected finite loss, got {loss}"

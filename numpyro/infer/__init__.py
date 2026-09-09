@@ -14,6 +14,7 @@ from numpyro.infer.elbo import (
 from numpyro.infer.ensemble import AIES, ESS
 from numpyro.infer.hmc import HMC, NUTS
 from numpyro.infer.hmc_gibbs import HMCECS, DiscreteHMCGibbs, HMCGibbs
+from numpyro.infer.importance import psis_diagnostic
 from numpyro.infer.initialization import (
     init_to_feasible,
     init_to_mean,
@@ -26,20 +27,27 @@ from numpyro.infer.mcmc import MCMC
 from numpyro.infer.mixed_hmc import MixedHMC
 from numpyro.infer.sa import SA
 from numpyro.infer.svi import SVI
-from numpyro.infer.util import Predictive, log_likelihood
+from numpyro.infer.util import (
+    Predictive,
+    initialize_model,
+    log_likelihood,
+)
 
-from . import autoguide, reparam
+from . import autoguide, calibration, reparam
 
 __all__ = [
     "AIES",
     "autoguide",
+    "calibration",
     "init_to_feasible",
     "init_to_mean",
     "init_to_median",
     "init_to_sample",
     "init_to_uniform",
     "init_to_value",
+    "initialize_model",
     "log_likelihood",
+    "psis_diagnostic",
     "reparam",
     "BarkerMH",
     "DiscreteHMCGibbs",

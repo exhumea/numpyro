@@ -81,9 +81,8 @@ def linear_regression():
 
 
 def categorical_probs():
-    probs0 = 0.5
     nbatch0, nbatch1 = 2, 1
-    probs = jnp.ones((nbatch0, nbatch1, 3)) * probs0
+    probs = jnp.ones((nbatch0, nbatch1, 3)) / 3
 
     def model(probs):
         probs = numpyro.deterministic("probs", probs)
@@ -162,12 +161,65 @@ def test_discrete_predictive_with_deterministic(parallel):
         infer_discrete=True,
         batch_ndims=2,
         parallel=parallel,
-        exclude_deterministic=False,
+        condition_deterministic=True,
     )
 
     predictive_samples = predictive(random.key(1), probs=probs)
     assert predictive_samples.keys() == {"counts_categorical"}
     assert predictive_samples["counts_categorical"].shape == probs.shape
+
+
+def test_predictive_exclude_deterministic_deprecated():
+    """`exclude_deterministic` still works but warns; `condition_deterministic`
+    is the new name (see #2086)."""
+    model, probs = categorical_probs()
+
+    with pytest.warns(FutureWarning, match="exclude_deterministic"):
+        predictive = Predictive(
+            model=model,
+            posterior_samples=dict(probs=probs),
+            batch_ndims=2,
+            exclude_deterministic=False,
+        )
+    assert predictive.condition_deterministic is True
+
+    with pytest.warns(FutureWarning, match="exclude_deterministic"):
+        predictive = Predictive(
+            model=model,
+            posterior_samples=dict(probs=probs),
+            batch_ndims=2,
+            exclude_deterministic=True,
+        )
+    assert predictive.condition_deterministic is False
+
+    # attribute access keeps working, with a warning
+    with pytest.warns(FutureWarning, match="exclude_deterministic"):
+        assert predictive.exclude_deterministic is True
+    with pytest.warns(FutureWarning, match="exclude_deterministic"):
+        predictive.exclude_deterministic = False
+    assert predictive.condition_deterministic is True
+
+    # passing both raises
+    with pytest.raises(ValueError, match="Only one of"):
+        Predictive(
+            model=model,
+            posterior_samples=dict(probs=probs),
+            batch_ndims=2,
+            condition_deterministic=True,
+            exclude_deterministic=False,
+        )
+
+
+def test_predictive_condition_deterministic_default():
+    """By default deterministic sites are re-computed, not conditioned on."""
+    model, probs = categorical_probs()
+
+    predictive = Predictive(
+        model=model,
+        posterior_samples=dict(probs=probs),
+        batch_ndims=2,
+    )
+    assert predictive.condition_deterministic is False
 
 
 def test_predictive_with_guide():
@@ -462,7 +514,7 @@ def test_initialize_model_change_point(init_strategy):
             rng_keys[i], model, init_strategy=init_strategy, model_args=(count_data,)
         )
         for name, p in init_params[0].items():
-            # XXX: the result is equal if we disable fast-math-mode
+            # Note: the result is equal if we disable fast-math-mode
             assert_allclose(p[i], init_params_i[0][name], atol=1e-6)
 
 
@@ -494,7 +546,7 @@ def test_initialize_model_dirichlet_categorical(init_strategy):
             rng_keys[i], model, init_strategy=init_strategy, model_args=(data,)
         )
         for name, p in init_params[0].items():
-            # XXX: the result is equal if we disable fast-math-mode
+            # Note: the result is equal if we disable fast-math-mode
             assert_allclose(p[i], init_params_i[0][name], atol=1e-6)
 
 

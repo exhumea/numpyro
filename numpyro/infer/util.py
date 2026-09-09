@@ -191,44 +191,74 @@ def transform_fn(transforms, params, invert=False):
     return {k: transforms[k](v) if k in transforms else v for k, v in params.items()}
 
 
-def constrain_fn(model, model_args, model_kwargs, params, return_deterministic=False):
+def constrain_fn(
+    model,
+    model_args,
+    model_kwargs,
+    params,
+    return_deterministic=False,
+    batch_ndims=0,
+):
     """
     (EXPERIMENTAL INTERFACE) Gets value at each latent site in `model` given
-    unconstrained parameters `params`. The `transforms` is used to transform these
-    unconstrained parameters to base values of the corresponding priors in `model`.
-    If a prior is a transformed distribution, the corresponding base value lies in
-    the support of base distribution. Otherwise, the base value lies in the support
-    of the distribution.
+    unconstrained parameters `params`. Each unconstrained value is pushed through
+    the inverse bijection of the corresponding prior's support to recover the
+    constrained value. If a prior is a transformed distribution, the corresponding
+    base value lies in the support of the base distribution. Otherwise, the base
+    value lies in the support of the distribution.
+
+    ``batch_ndims`` declares how many leading sample dimensions each leaf of
+    ``params`` carries, so the transforms are ``jax.vmap``-ed the correct number
+    of times. The common layouts are: ``batch_ndims=0`` (a single unconstrained
+    position, the default), ``batch_ndims=1`` (a single chain of samples), and
+    ``batch_ndims=2`` (``num_chains x num_samples``, matching
+    :meth:`MCMC.get_samples(group_by_chain=True)
+    <numpyro.infer.MCMC.get_samples>`). This is useful to map a batch of
+    unconstrained samples produced by an external sampler back to the
+    constrained space.
 
     :param model: a callable containing NumPyro primitives.
     :param tuple model_args: args provided to the model.
     :param dict model_kwargs: kwargs provided to the model.
     :param dict params: dictionary of unconstrained values keyed by site
-        names.
+        names. Leading dimensions are batch dimensions (see ``batch_ndims``).
     :param bool return_deterministic: whether to return the value of `deterministic`
         sites from the model. Defaults to `False`.
+    :param int batch_ndims: number of leading batch dimensions on each leaf of
+        ``params``. Defaults to ``0`` (a single position).
     :return: `dict` of transformed params.
     """
+    if batch_ndims < 0:
+        raise ValueError(
+            f"batch_ndims must be a non-negative integer, got {batch_ndims}."
+        )
 
-    def substitute_fn(site):
-        if site["name"] in params:
-            if site["type"] == "sample":
-                with helpful_support_errors(site):
-                    return biject_to(site["fn"].support)(params[site["name"]])
-            elif site["type"] == "param":
-                constraint = site["kwargs"].pop("constraint", constraints.real)
-                with helpful_support_errors(site):
-                    return biject_to(constraint)(params[site["name"]])
-            else:
-                return params[site["name"]]
+    def single(position):
+        def substitute_fn(site):
+            if site["name"] in position:
+                if site["type"] == "sample":
+                    with helpful_support_errors(site):
+                        return biject_to(site["fn"].support)(position[site["name"]])
+                elif site["type"] == "param":
+                    constraint = site["kwargs"].pop("constraint", constraints.real)
+                    with helpful_support_errors(site):
+                        return biject_to(constraint)(position[site["name"]])
+                else:
+                    return position[site["name"]]
 
-    substituted_model = substitute(model, substitute_fn=substitute_fn)
-    model_trace = trace(substituted_model).get_trace(*model_args, **model_kwargs)
-    return {
-        k: v["value"]
-        for k, v in model_trace.items()
-        if (k in params) or (return_deterministic and (v["type"] == "deterministic"))
-    }
+        substituted_model = substitute(model, substitute_fn=substitute_fn)
+        model_trace = trace(substituted_model).get_trace(*model_args, **model_kwargs)
+        return {
+            k: v["value"]
+            for k, v in model_trace.items()
+            if (k in position)
+            or (return_deterministic and (v["type"] == "deterministic"))
+        }
+
+    fn = single
+    for _ in range(batch_ndims):
+        fn = jax.vmap(fn)
+    return fn(params)
 
 
 def get_transforms(model, model_args, model_kwargs, params):
@@ -393,7 +423,7 @@ def find_valid_initial_params(
         key, subkey = random.split(key)
 
         if radius is None or prototype_params is None:
-            # XXX: we don't want to apply enum to draw latent samples
+            # Note: we don't want to apply enum to draw latent samples
             model_ = model
             if enum:
                 from numpyro.contrib.funsor import enum as enum_handler
@@ -461,7 +491,7 @@ def find_valid_initial_params(
                 if device_get(is_valid):
                     return (init_params, pe, z_grad), is_valid
 
-        # XXX: this requires compiling the model, so for multi-chain, we trace the model 2-times
+        # Note: this requires compiling the model, so for multi-chain, we trace the model 2-times
         # even if the init_state is a valid result
         _, _, (init_params, pe, z_grad), is_valid = while_loop(
             cond_fn, body_fn, init_state
@@ -516,7 +546,7 @@ def _get_model_transforms(model, model_args=(), model_kwargs=None):
                 support = v["fn"].support
                 with helpful_support_errors(v, raise_warnings=True):
                     inv_transforms[k] = biject_to(support)
-                # XXX: the following code filters out most situations with dynamic supports
+                # Note: the following code filters out most situations with dynamic supports
                 args = ()
                 if isinstance(support, constraints._GreaterThan):
                     args = ("lower_bound",)
@@ -582,7 +612,7 @@ def get_potential_fn(
             _partial_args_kwargs, partial(potential_energy, model, enum=enum)
         )
         if replay_model:
-            # XXX: we seed to sample discrete sites (but not collect them)
+            # Note: we seed to sample discrete sites (but not collect them)
             model_ = seed(model.fn, 0) if enum else model
             postprocess_fn = partial(
                 _partial_args_kwargs,
@@ -779,6 +809,10 @@ def initialize_model(
                             site["fn"]._validate_sample(site["value"])
                         if len(ws) > 0:
                             for w in ws:
+                                # `catch_warnings(record=True)` stores `Warning`
+                                # instances; narrow the `Warning | str` type so
+                                # `.args` access type-checks.
+                                assert isinstance(w.message, Warning)
                                 # at site information to the warning message
                                 w.message.args = (
                                     "Site {}: {}".format(
@@ -936,7 +970,18 @@ class Predictive(object):
 
         + set `batch_ndims=1` to get predictions from a one dimensional batch of the guide and parameters
           with shapes `(num_samples x batch_size x ...)`
-    :param exclude_deterministic: indicates whether to ignore deterministic sites from the posterior samples.
+    :param condition_deterministic: if True, deterministic sites present in
+        `posterior_samples` are conditioned on (substituted into the model)
+        when predicting; if False (default), they are ignored and instead
+        re-computed from their parent sites. Note that this argument controls
+        how deterministic sites are *handled during substitution*, not whether
+        they appear in the returned dictionary — use `return_sites` to control
+        which sites are returned. Conditioning on deterministic sites can
+        produce wrong shapes or stale values when predicting on new data,
+        which is why it is disabled by default.
+    :param exclude_deterministic: deprecated alias, use
+        ``condition_deterministic`` instead (``exclude_deterministic=True``
+        corresponds to ``condition_deterministic=False``).
 
     :return: dict of samples from the predictive distribution.
 
@@ -978,8 +1023,27 @@ class Predictive(object):
         infer_discrete: bool = False,
         parallel: bool = False,
         batch_ndims: Optional[int] = None,
-        exclude_deterministic: bool = True,
+        condition_deterministic: Optional[bool] = None,
+        exclude_deterministic: Optional[bool] = None,
     ):
+        if exclude_deterministic is not None:
+            if condition_deterministic is not None:
+                raise ValueError(
+                    "Only one of `condition_deterministic` or the deprecated "
+                    "`exclude_deterministic` can be provided, not both."
+                )
+            warnings.warn(
+                "`exclude_deterministic` is deprecated, use "
+                "`condition_deterministic` instead "
+                "(`exclude_deterministic=True` corresponds to "
+                "`condition_deterministic=False`).",
+                FutureWarning,
+                stacklevel=find_stack_level(),
+            )
+            condition_deterministic = not exclude_deterministic
+        elif condition_deterministic is None:
+            condition_deterministic = False
+
         if posterior_samples is None and num_samples is None:
             raise ValueError(
                 "Either posterior_samples or num_samples must be specified."
@@ -1039,7 +1103,28 @@ class Predictive(object):
         self.parallel = parallel
         self.batch_ndims = batch_ndims
         self._batch_shape = batch_shape
-        self.exclude_deterministic = exclude_deterministic
+        self.condition_deterministic = condition_deterministic
+
+    @property
+    def exclude_deterministic(self) -> bool:
+        """Deprecated alias for ``not condition_deterministic``."""
+        warnings.warn(
+            "`exclude_deterministic` is deprecated, use "
+            "`condition_deterministic` instead.",
+            FutureWarning,
+            stacklevel=find_stack_level(),
+        )
+        return not self.condition_deterministic
+
+    @exclude_deterministic.setter
+    def exclude_deterministic(self, value: bool) -> None:
+        warnings.warn(
+            "`exclude_deterministic` is deprecated, use "
+            "`condition_deterministic` instead.",
+            FutureWarning,
+            stacklevel=find_stack_level(),
+        )
+        self.condition_deterministic = not value
 
     def _call_with_params(self, rng_key, params, args, kwargs):
         posterior_samples = self.posterior_samples
@@ -1056,7 +1141,7 @@ class Predictive(object):
                 parallel=self.parallel,
                 model_args=args,
                 model_kwargs=kwargs,
-                exclude_deterministic=self.exclude_deterministic,
+                exclude_deterministic=not self.condition_deterministic,
             )
         model = substitute(self.model, self.params)
         return _predictive(
@@ -1069,7 +1154,7 @@ class Predictive(object):
             parallel=self.parallel,
             model_args=args,
             model_kwargs=kwargs,
-            exclude_deterministic=self.exclude_deterministic,
+            exclude_deterministic=not self.condition_deterministic,
         )
 
     def __call__(self, rng_key, *args, **kwargs):

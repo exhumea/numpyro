@@ -14,20 +14,10 @@ repos:
         language: system
         files: "(.py$)|(.*.ipynb$)"
 
-      - id: mypy
-        name: mypy
-        language: python
-        entry: mypy --install-types --non-interactive
-        files: ^numpyro/
-
+  - repo: https://github.com/astral-sh/ty-pre-commit
+    rev: v0.0.75
+    hooks:
       - id: ty
-        name: ty check
-        language: python
-        entry: ty
-        args: [check, --config-file, ty.toml]
-        pass_filenames: false
-        always_run: true
-        additional_dependencies: [ty]
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -38,7 +28,7 @@ repos:
         exclude: notebooks/
 
   - repo: https://github.com/codespell-project/codespell
-    rev: v2.4.1
+    rev: v2.4.2
     hooks:
       - id: codespell
         stages: [pre-commit, commit-msg]
@@ -46,7 +36,12 @@ repos:
 
   # Format yaml files
   - repo: https://github.com/google/yamlfmt
-    rev: v0.20.0
+    rev: v0.21.0
     hooks:
       - id: yamlfmt
         args: [-formatter, retain_line_breaks=true]
+
+  - repo: https://github.com/tombi-toml/tombi-pre-commit
+    rev: v0.11.5
+    hooks:
+      - id: tombi-format

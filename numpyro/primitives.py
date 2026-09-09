@@ -181,10 +181,11 @@ def sample(
     )
     if not isinstance(fn, numpyro.distributions.Distribution):
         type_error = TypeError(
-            "It looks like you tried to use a fn that isn't an instance of "
+            "Invalid type for 'fn': expected an instance of "
             "numpyro.distributions.Distribution, funsor.Funsor or "
-            "tensorflow_probability.distributions.Distribution. If you're using "
-            "funsor or tensorflow_probability, make sure they are correctly installed."
+            "tensorflow_probability.distributions.Distribution, "
+            f"but received {type(fn).__name__}. If you're using funsor or "
+            "tensorflow_probability, make sure they are correctly installed."
         )
 
         # fn can be a funsor.Funsor, but this won't be installed for all users
@@ -285,20 +286,24 @@ def param(
         )
         return init_value
 
+    args: tuple
     if callable(init_value):
 
-        def fn(init_fn: Callable, *args, **kwargs) -> ArrayLike:
-            return init_fn(prng_key())
+        def fn(*args, init_value: Callable = init_value, **kwargs) -> ArrayLike:
+            return init_value(prng_key())
+
+        args = ()
 
     else:
         fn = cast(Callable, identity)
+        args = (init_value,)
 
     # Otherwise, we initialize a message...
     initial_msg = {
         "type": "param",
         "name": name,
         "fn": fn,
-        "args": (init_value,),
+        "args": args,
         "kwargs": kwargs,
         "value": None,
         "scale": None,
@@ -509,7 +514,7 @@ class plate(Messenger):
         self.subsample_size = self._indices.shape[0]
         super(plate, self).__init__()
 
-    # XXX: different from Pyro, this method returns dim and indices
+    # Note: different from Pyro, this method returns dim and indices
     @staticmethod
     def _subsample(name, size, subsample_size, dim):  # noqa: ANN001, ANN205
         msg = {
